@@ -273,69 +273,199 @@ impl Blob {
     }
 }
 
+///
+/// Operations that the virtual machine carries out when running the
+/// "byte-code".
+///
 #[derive(Debug, Clone)]
 pub enum Op {
+    /// Should never be run.
+    /// Finding it in a program is a critical error.
     Illegal,
 
+    /// Pops one value from the stack.
+    ///
+    /// {A, B} - Pop - {A}
     Pop,
+    /// Assumes the value on the top of the stack has an upvalue, and closes
+    /// that upvalue.
+    ///
+    /// {A, B} - Pop - {A}
     PopUpvalue,
+    /// Copies the value on the top of the stack and pushes it to the stack.
+    ///
+    /// {A, B} - Copy - {A, B, B}
     Copy,
+    /// Pushes the given value to the stack. Also links upvalues if the value is
+    /// a function.
+    ///
+    /// {A} - Constant(B) - {A, B}
     Constant(Value),
+    /// Creates a new [Value::Tuple] with the given size and pushed it to the
+    /// stack.
+    ///
+    /// {A, B, C} - Tuple(3) - {D(A, B, C)}
     Tuple(usize),
 
+    /// Indexes something indexable (currently only tuples) and pushes that
+    /// value to the stack.
+    ///
+    /// {T, I} - Index - {T[I]}
     Index,
+    /// Looks up a field by the given name and replaces the parent with it.
+    /// Currently only expects a [Value::Blob].
+    ///
+    /// {O} - Get(F) - {O.F}
     Get(String),
+    /// Looks up a field by the given name and replaces the current value in the
+    /// object.
+    /// Currently only expects a [Value::Blob].
+    ///
+    /// {O} - Set(F) - {}
     Set(String),
 
+    /// Adds the two top elements on the stack using the function [op::add].
+    ///
+    /// {A, B} - Add - {A + B}
     Add,
+    /// Subtracts the two top elements on the stack using the function
+    /// [op::sub].
+    ///
+    /// {A, B} - Sub - {A - B}
     Sub,
+    /// Multiplies the two top elements on the stack using the function
+    /// [op::mul].
+    ///
+    /// {A, B} - Mul - {A - B}
     Mul,
+    /// Divides the two top elements on the stack using the function [op::div].
+    ///
+    /// {A, B} - Div - {A / B}
     Div,
+    /// Negates the top element on the stack.
+    ///
+    /// {A} - Neg - {-A}
     Neg,
 
+    /// Performs a boolean "and" on the top 2 stack elements using [op::and].
+    ///
+    /// {A, B} - And - {A && B}
     And,
+    /// Performs a boolean or on the top 2 stack elements using [op::or].
+    ///
+    /// {A, B} - Or - {A || B}
     Or,
+    /// Performs a boolean not on the top stack element using [op::not].
+    ///
+    /// {A} - Not - {!A}
     Not,
 
+    /// Sets the instruction pointer to the given value.
+    ///
+    /// Does not affect the stack.
     Jmp(usize),
+    /// Sets the instruction pointer to the given value if the topmost value is
+    /// false. The topmost value is popped.
+    ///
+    /// {A} - JmpFalse(n) - {}
     JmpFalse(usize),
 
-    Equal,   // ==
-    Less,    // <
-    Greater, // >
+    /// Compares the top 2 elements on the stack for equality and pushes the
+    /// result. Compares using [op::eq].
+    ///
+    /// {A, B} - Equal - {A == B}
+    Equal,
+    /// Compares the top 2 elements on the stack for inequality and pushes the
+    /// result. Compares using [op::less].
+    ///
+    /// {A, B} - Less - {A < B}
+    Less,
+    /// Compares the top 2 elements on the stack for inequality and pushes the
+    /// result. Compares using [op::less].
+    ///
+    /// {A, B} - Greater - {B < A}
+    Greater,
 
+    /// Pops the top value on the stack and crashes the program if it is false.
+    ///
+    /// {A} - Assert - {}
     Assert,
+    /// Should not be executed. If it is the program crashes.
+    ///
+    /// Does not affect the stack.
     Unreachable,
 
+    /// Reads the value counted from the bottom of the stack and pushes it to
+    /// the stack.
+    ///
+    /// {A, B} - ReadLocal(0) - {A, B, A}
     ReadLocal(usize),
+    /// Sets the value counted from the bottom of the stack to the top value.
+    /// The top value is popped.
+    ///
+    /// {A, B} - AssignLocal(0) - {B}
     AssignLocal(usize),
 
+    /// Reads an upvalue and pushes it to the stack.
+    ///
+    /// {} - ReadUpvalue(0) - {A}
     ReadUpvalue(usize),
+    /// Sets an upvalue to the top value. The top value is popped.
+    ///
+    /// {A} - AssignUpvalue(0) - {}
     AssignUpvalue(usize),
 
+    /// A helper instruction for the typechecker that makes sure that the top
+    /// value on the stack is of the given type. It signals that the "variable"
+    /// is pushed.
+    ///
+    /// Does not affect the stack.
     Define(Type),
 
+    /// Calls either a [Value::Blob], [Value::Function] or
+    /// [Value::ExternFunction] with the given number of arguments. The called
+    /// value is replaced with the result.
+    ///
+    /// {F, A, B} - Call(2) - {F(A, B)}
     Call(usize),
 
+    /// Prints and pops the top value on the stack.
+    ///
+    /// {A} - Print - {}
     Print,
 
+    /// Pops the current stack frame and replaces the old slot 0 with the top
+    /// value. Also pops upvalues.
+    ///
+    /// {F, A, B} - Return - {..., B}
     Return,
+
+    /// Yields execution to the program invoking the VM.
+    ///
+    /// Does not affect the stack.
     Yield,
 }
 
-mod op {
+///
+/// All operators that can be applied to values.
+///
+pub mod op {
     use super::Value;
     use std::rc::Rc;
 
-    fn tuple_op(a: &Rc<Vec<Value>>, b: &Rc<Vec<Value>>, f: fn (&Value, &Value) -> Value) -> Value {
+    fn tuple_bin_op(a: &Rc<Vec<Value>>, b: &Rc<Vec<Value>>, f: fn (&Value, &Value) -> Value) -> Value {
         Value::Tuple(Rc::new(a.iter().zip(b.iter()).map(|(a, b)| f(a, b)).collect()))
+    }
+
+    fn tuple_un_op(a: &Rc<Vec<Value>>, f: fn (&Value) -> Value) -> Value {
+        Value::Tuple(Rc::new(a.iter().map(f).collect()))
     }
 
     pub fn neg(value: &Value) -> Value {
         match value {
             Value::Float(a) => Value::Float(-a),
             Value::Int(a) => Value::Int(-a),
-            Value::Tuple(a) => Value::Tuple(Rc::new(a.iter().map(neg).collect())),
+            Value::Tuple(a) => tuple_un_op(a, neg),
             _ => Value::Nil,
         }
     }
@@ -343,7 +473,7 @@ mod op {
     pub fn not(value: &Value) -> Value {
         match value {
             Value::Bool(a) => Value::Bool(!a),
-            Value::Tuple(a) => Value::Tuple(Rc::new(a.iter().map(not).collect())),
+            Value::Tuple(a) => tuple_un_op(a, not),
             _ => Value::Nil,
         }
     }
@@ -354,7 +484,7 @@ mod op {
             (Value::Float(a), Value::Float(b)) => Value::Float(a + b),
             (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
             (Value::String(a), Value::String(b)) => Value::String(Rc::from(format!("{}{}", a, b))),
-            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_op(a, b, add),
+            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_bin_op(a, b, add),
             _ => Value::Nil,
         }
     }
@@ -367,7 +497,7 @@ mod op {
         match (a, b) {
             (Value::Float(a), Value::Float(b)) => Value::Float(a * b),
             (Value::Int(a), Value::Int(b)) => Value::Int(a * b),
-            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_op(a, b, mul),
+            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_bin_op(a, b, mul),
             _ => Value::Nil,
         }
     }
@@ -376,7 +506,7 @@ mod op {
         match (a, b) {
             (Value::Float(a), Value::Float(b)) => Value::Float(a / b),
             (Value::Int(a), Value::Int(b)) => Value::Int(a / b),
-            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_op(a, b, div),
+            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_bin_op(a, b, div),
             _ => Value::Nil,
         }
     }
@@ -387,7 +517,7 @@ mod op {
             (Value::Int(a), Value::Int(b)) => Value::Bool(a == b),
             (Value::String(a), Value::String(b)) => Value::Bool(a == b),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a == b),
-            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_op(a, b, eq),
+            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_bin_op(a, b, eq),
             _ => Value::Nil,
         }
     }
@@ -398,7 +528,7 @@ mod op {
             (Value::Int(a), Value::Int(b)) => Value::Bool(a < b),
             (Value::String(a), Value::String(b)) => Value::Bool(a < b),
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(a < b),
-            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_op(a, b, less),
+            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_bin_op(a, b, less),
             _ => Value::Nil,
         }
     }
@@ -410,7 +540,7 @@ mod op {
     pub fn and(a: &Value, b: &Value) -> Value {
         match (a, b) {
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a && *b),
-            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_op(a, b, and),
+            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_bin_op(a, b, and),
             _ => Value::Nil,
         }
     }
@@ -418,7 +548,7 @@ mod op {
     pub fn or(a: &Value, b: &Value) -> Value {
         match (a, b) {
             (Value::Bool(a), Value::Bool(b)) => Value::Bool(*a || *b),
-            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_op(a, b, or),
+            (Value::Tuple(a), Value::Tuple(b)) if a.len() == b.len() => tuple_bin_op(a, b, or),
             _ => Value::Nil,
         }
     }

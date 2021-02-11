@@ -486,7 +486,7 @@ impl VM {
                 }
             }
         }
-        self.frame_mut().ip += 1;
+        // self.frame_mut().ip += 1;
         Ok(OpResult::Continue)
     }
 
@@ -758,7 +758,7 @@ impl VM {
                 return Ok(())
             }
         }
-        self.frame_mut().ip += 1;
+        // self.frame_mut().ip += 1;
         Ok(())
     }
 

@@ -768,7 +768,8 @@ impl Compiler {
             }
         });
 
-        add(self, &mut function_block, Op::Constant, self.nil_value());
+        let constant = self.add_constant(Value::from(return_type.clone()));
+        add(self, &mut function_block, Op::Constant, constant);
         add_op(self, &mut function_block, Op::Return);
 
         function_block.ty = Type::Function(args, Box::new(return_type));

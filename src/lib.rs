@@ -290,6 +290,9 @@ impl Blob {
 ///
 #[derive(Debug, Copy, Clone)]
 pub enum Op {
+    /// Nothing is done.
+    Nop,
+
     /// This instruction should never be run.
     /// Finding it in a program is a critical error.
     Illegal,

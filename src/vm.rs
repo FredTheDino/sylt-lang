@@ -200,6 +200,8 @@ impl VM {
     /// Runs a single operation on the VM
     fn eval_op(&mut self, op: Op) -> Result<OpResult, Error> {
         match op {
+            Op::Nop => {}
+
             Op::Illegal => {
                 error!(self, ErrorKind::InvalidProgram);
             }

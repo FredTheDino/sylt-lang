@@ -3,6 +3,7 @@ use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::rc::Rc;
+use std::convert::TryInto;
 
 use owo_colors::OwoColorize;
 
@@ -155,9 +156,20 @@ impl VM {
         &self.strings[slot]
     }
 
-    fn op(&self) -> Op {
+    fn op(&mut self) -> Op {
         let ip = self.frame().ip;
-        self.frame().block.borrow().ops[ip]
+        self.frame_mut().ip += 1;
+        // Note(ed): This is pretty... Dumb...
+        unsafe { std::mem::transmute::<u8, Op>(self.frame().block.borrow().ops[ip]) }
+    }
+
+    fn usize(&mut self) -> usize {
+        let ip = self.frame().ip;
+        self.frame_mut().ip += 8;
+        usize::from_be_bytes(self.frame().block.borrow().ops[ip..ip+8]
+            .try_into()
+            .unwrap_or_else(|_| self.crash_and_burn())
+        )
     }
 
     fn print_stacktrace(&self) {
@@ -214,7 +226,8 @@ impl VM {
                 self.pop();
             }
 
-            Op::Tuple(size) => {
+            Op::Tuple => {
+                let size = self.usize();
                 let values = self.stack.split_off(self.stack.len() - size);
                 self.stack.push(Value::Tuple(Rc::new(values)));
             }
@@ -236,7 +249,8 @@ impl VM {
                 return Ok(OpResult::Yield);
             }
 
-            Op::Constant(value) => {
+            Op::Constant => {
+                let value = self.usize();
                 let offset = self.frame().stack_offset;
                 let constant = self.constant(value).clone();
                 let value = match constant {
@@ -282,7 +296,8 @@ impl VM {
                 }
             }
 
-            Op::Get(field) => {
+            Op::Get => {
+                let field = self.usize();
                 let inst = self.pop();
                 let field = self.string(field);
                 if let Value::BlobInstance(ty, values) = inst {
@@ -293,7 +308,8 @@ impl VM {
                 }
             }
 
-            Op::Set(field) => {
+            Op::Set => {
+                let field = self.usize();
                 let (inst, value) = self.poppop();
                 let field = self.string(field);
                 if let Value::BlobInstance(ty, values) = inst {
@@ -326,19 +342,23 @@ impl VM {
 
             Op::Not => { one_op!(self, Op::Not, op::not); }
 
-            Op::Jmp(line) => {
+            Op::Jmp => {
+                let line = self.usize();
                 self.frame_mut().ip = line;
                 return Ok(OpResult::Continue);
             }
 
-            Op::JmpFalse(line) => {
+            Op::JmpFalse => {
+                let line = self.usize();
                 if matches!(self.pop(), Value::Bool(false)) {
                     self.frame_mut().ip = line;
                     return Ok(OpResult::Continue);
                 }
             }
 
-            Op::JmpNPop(line, to_pop) => {
+            Op::JmpNPop => {
+                let line = self.usize();
+                let to_pop = self.usize();
                 let hi = self.stack.len();
                 let lo = hi - to_pop;
                 for slot in lo..hi {
@@ -359,7 +379,8 @@ impl VM {
                 self.push(Value::Bool(true));
             }
 
-            Op::ReadUpvalue(slot) => {
+            Op::ReadUpvalue => {
+                let slot = self.usize();
                 let offset = self.frame().stack_offset;
                 let value = match &self.stack[offset] {
                     Value::Function(ups, _) => {
@@ -370,7 +391,8 @@ impl VM {
                 self.push(value);
             }
 
-            Op::AssignUpvalue(slot) => {
+            Op::AssignUpvalue => {
+                let slot = self.usize();
                 let offset = self.frame().stack_offset;
                 let value = self.pop();
                 let slot = match &self.stack[offset] {
@@ -380,19 +402,22 @@ impl VM {
                 slot.borrow_mut().set(&mut self.stack, value);
             }
 
-            Op::ReadLocal(slot) => {
+            Op::ReadLocal => {
+                let slot = self.usize();
                 let slot = self.frame().stack_offset + slot;
                 self.push(self.stack[slot].clone());
             }
 
-            Op::AssignLocal(slot) => {
+            Op::AssignLocal => {
+                let slot = self.usize();
                 let slot = self.frame().stack_offset + slot;
                 self.stack[slot] = self.pop();
             }
 
-            Op::Define(_) => {}
+            Op::Define => {}
 
-            Op::Call(num_args) => {
+            Op::Call => {
+                let num_args = self.usize();
                 let new_base = self.stack.len() - 1 - num_args;
                 match self.stack[new_base].clone() {
                     Value::Blob(blob_id) => {
@@ -515,7 +540,8 @@ impl VM {
                 self.print_stack()
             }
 
-            let op = self.eval_op(self.op())?;
+            let op = self.op();
+            let op = self.eval_op(op)?;
             if matches!(op, OpResult::Done | OpResult::Yield) {
                 return Ok(op);
             }
@@ -527,11 +553,12 @@ impl VM {
         match op {
             Op::Unreachable => {}
 
-            Op::Jmp(_line) => {}
+            Op::Jmp => { self.usize(); }
 
             Op::Yield => {}
 
-            Op::Constant(value) => {
+            Op::Constant => {
+                let value = self.usize();
                 match self.constant(value).clone() {
                     Value::Function(_, block) => {
                         self.push(Value::Function(Vec::new(), block.clone()));
@@ -568,7 +595,8 @@ impl VM {
                 }
             }
 
-            Op::Get(field) => {
+            Op::Get => {
+                let field = self.usize();
                 let inst = self.pop();
                 let field = self.string(field);
                 if let Value::BlobInstance(ty, _) = inst {
@@ -580,7 +608,8 @@ impl VM {
                 }
             }
 
-            Op::Set(field) => {
+            Op::Set => {
+                let field = self.usize();
                 let (inst, value) = self.poppop();
                 let field = self.string(field);
 
@@ -598,12 +627,14 @@ impl VM {
                 self.pop();
             }
 
-            Op::ReadUpvalue(slot) => {
+            Op::ReadUpvalue => {
+                let slot = self.usize();
                 let value = Value::from(&self.frame().block.borrow().upvalues[slot].2);
                 self.push(value);
             }
 
-            Op::AssignUpvalue(slot) => {
+            Op::AssignUpvalue => {
+                let slot = self.usize();
                 let var = self.frame().block.borrow().upvalues[slot].2.clone();
                 let up = self.pop().into();
                 if var != up {
@@ -627,7 +658,8 @@ impl VM {
                 self.pop();
             }
 
-            Op::Define(ty) => {
+            Op::Define => {
+                let ty = self.usize();
                 let ty = self.ty(ty);
                 let top_type = self.stack.last().unwrap().into();
                 match (ty, top_type) {
@@ -645,7 +677,8 @@ impl VM {
                 }
             }
 
-            Op::Call(num_args) => {
+            Op::Call => {
+                let num_args = self.usize();
                 let new_base = self.stack.len() - 1 - num_args;
                 match self.stack[new_base].clone() {
                     Value::Blob(blob_id) => {
@@ -707,14 +740,18 @@ impl VM {
                 }
             }
 
-            Op::JmpFalse(_) => {
+            Op::JmpFalse => {
+                self.usize();
                 match self.pop() {
                     Value::Bool(_) => {},
                     a => { error!(self, ErrorKind::TypeError(op, vec![a.into()])) },
                 }
             }
 
-            Op::JmpNPop(_, _) => {}
+            Op::JmpNPop => {
+                self.usize();
+                self.usize();
+            }
 
             _ => {
                 self.eval_op(op)?;
@@ -749,6 +786,8 @@ impl VM {
         loop {
             let ip = self.frame().ip;
             if ip >= self.frame().block.borrow().ops.len() {
+                // TODO(ed): We don't garantee functions to return the always return the
+                // correct type. We don't handle the implicit return case.
                 break;
             }
 
@@ -756,7 +795,8 @@ impl VM {
                 self.print_stack()
             }
 
-            if let Err(e) = self.check_op(self.op()) {
+            let op = self.op();
+            if let Err(e) = self.check_op(op) {
                 errors.push(e);
                 self.frame_mut().ip += 1;
             }

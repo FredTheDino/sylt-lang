@@ -316,12 +316,12 @@ pub enum Op {
     /// Also links upvalues if the value is a function.
     ///
     /// {A} - Constant(B) - {A, B}
-    Constant(usize),
+    Constant,
     /// Creates a new [Tuple] with the given size and place it on the top
     /// of the stack.
     ///
     /// {A, B, C} - Tuple(3) - {D(A, B, C)}
-    Tuple(usize),
+    Tuple,
 
     /// Indexes something indexable, currently only Tuples,
     /// and adds that element to the stack.
@@ -334,14 +334,14 @@ pub enum Op {
     /// (name is looked up in the internal string-list)
     ///
     /// {O} - Get(F) - {O.F}
-    Get(usize),
+    Get,
     /// Looks up a field by the given name
     /// and replaces the current value in the object.
     /// Currently only expects [Value::Blob].
     /// (name is looked up in the internal string-list)
     ///
     /// {O} - Set(F) - {}
-    Set(usize),
+    Set,
 
     /// Adds the two top elements on the stack,
     /// using the function [op::add]. The result
@@ -392,14 +392,14 @@ pub enum Op {
     /// to the given value.
     ///
     /// Does not affect the stack.
-    Jmp(usize),
+    Jmp,
     /// Sets the instruction pointer
     /// to the given value, if the
     /// topmost value is false, also
     /// pops this value.
     ///
     /// {A} - JmpFalse(n) - {}
-    JmpFalse(usize),
+    JmpFalse,
     /// Sets the instruction pointer
     /// to the given value and pops
     /// the given amount of values.
@@ -407,7 +407,7 @@ pub enum Op {
     /// Used for 'break' and 'continue'.
     ///
     /// {A, B, C} - JmpNPop(n, 2) - {A}
-    JmpNPop(usize, usize),
+    JmpNPop,
 
     /// Compares the two topmost elements
     /// on the stack for equality, and pushes
@@ -444,24 +444,24 @@ pub enum Op {
     /// to the top.
     ///
     /// {A, B} - ReadLocal(0) - {A, B, A}
-    ReadLocal(usize),
+    ReadLocal,
     /// Sets the value at the given index
     /// of the stack, to the topmost value.
     /// Pops the topsmost element.
     ///
     /// {A, B} - AssignLocal(0) - {B}
-    AssignLocal(usize),
+    AssignLocal,
 
     /// Reads the upvalue, and adds it
     /// to the top of the stack.
     ///
     /// {} - ReadUpvalue(0) - {A}
-    ReadUpvalue(usize),
+    ReadUpvalue,
     /// Sets the given upvalue, and pops
     /// the topmost element.
     ///
     /// {A} - AssignUpvalue(0) - {}
-    AssignUpvalue(usize),
+    AssignUpvalue,
 
     /// A helper instruction for the typechecker,
     /// makes sure the top value on the stack
@@ -470,7 +470,7 @@ pub enum Op {
     /// (The type is looked up in the constants vector)
     ///
     /// Does not affect the stack.
-    Define(usize),
+    Define,
 
     /// Calls "something" with the given number
     /// of arguments. The callable value is
@@ -480,7 +480,7 @@ pub enum Op {
     /// and [Value::ExternFunction].
     ///
     /// {F, A, B} - Call(2) - {F(A, B)}
-    Call(usize),
+    Call,
 
     /// Prints and pops the top value on the stack.
     ///
@@ -618,7 +618,7 @@ pub struct Block {
 
     pub name: String,
     pub file: PathBuf,
-    ops: Vec<Op>,
+    ops: Vec<u8>,
     last_line_offset: usize,
     line_offsets: HashMap<usize, usize>,
     line: usize,
@@ -690,17 +690,22 @@ impl Block {
         println!();
     }
 
-    fn add(&mut self, op: Op, token_position: usize) -> usize {
-        let len = self.curr();
-        self.add_line(token_position);
-        self.ops.push(op);
+    fn add(&mut self, op: Op, n: usize, token_position: usize) -> usize {
+        let len = self.add_op(op, token_position);
+        self.add_usize(n);
         len
     }
 
-    fn add_from(&mut self, ops: &[Op], token_position: usize) -> usize {
+    fn add_op(&mut self, op: Op, token_position: usize) -> usize {
         let len = self.curr();
         self.add_line(token_position);
-        self.ops.extend_from_slice(ops);
+        self.ops.push(op as u8);
+        len
+    }
+
+    fn add_usize(&mut self, n: usize) -> usize {
+        let len = self.curr();
+        self.ops.extend(n.to_be_bytes().iter());
         len
     }
 
@@ -708,8 +713,10 @@ impl Block {
         self.ops.len()
     }
 
-    fn patch(&mut self, op: Op, pos: usize) {
-        self.ops[pos] = op;
+    fn patch(&mut self, new: usize, pos: usize) {
+        for (i, b) in new.to_be_bytes().iter().enumerate() {
+            self.ops[pos + i] = *b;
+        }
     }
 }
 

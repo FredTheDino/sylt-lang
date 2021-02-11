@@ -169,17 +169,17 @@ impl Frame {
         // Compiler error if this fails
         for (addr, stacksize, op) in self.loops.pop().unwrap().iter() {
             let to_pop = stacksize - stacktarget;
-            let op = match op {
-                LoopOp::Continue => Op::JmpNPop(start, to_pop),
-                LoopOp::Break => Op::JmpNPop(end, to_pop),
+            match op {
+                LoopOp::Continue => block.patch(start, *addr),
+                LoopOp::Break => block.patch(end, *addr),
             };
-            block.patch(op, *addr);
+            block.patch(to_pop, addr + 8);
         }
     }
 
     fn add_continue(&mut self, addr: usize, stacksize: usize, block: &mut Block) -> Result<(), ()> {
         if let Some(top) = self.loops.last_mut() {
-            top.push((addr, stacksize, LoopOp::Continue));
+            top.push((addr + 1, stacksize, LoopOp::Continue));
             Ok(())
         } else {
             Err(())
@@ -283,8 +283,16 @@ macro_rules! push_scope {
 }
 
 /// Helper function for adding operations to the given block.
+fn add(compiler: &Compiler, block: &mut Block, op: Op, n: usize) -> usize {
+    block.add(op, n, compiler.line())
+}
+
 fn add_op(compiler: &Compiler, block: &mut Block, op: Op) -> usize {
-    block.add(op, compiler.line())
+    block.add_op(op, compiler.line())
+}
+
+fn add_usize(compiler: &Compiler, block: &mut Block, n: usize) -> usize {
+    block.add_usize(n)
 }
 
 impl Compiler {
@@ -476,7 +484,7 @@ impl Compiler {
             _ => { error!(self, "Cannot parse value."); Value::Bool(false) }
         };
         let constant = self.add_constant(value);
-        add_op(self, block, Op::Constant(constant));
+        add(self, block, Op::Constant, constant);
     }
 
     fn grouping_or_tuple(&mut self, block: &mut Block) {
@@ -515,7 +523,7 @@ impl Compiler {
         }
 
         expect!(self, Token::RightParen, "Expected ')' after tuple.");
-        add_op(self, block, Op::Tuple(num_args));
+        add(self, block, Op::Tuple, num_args);
     }
 
     fn grouping(&mut self, block: &mut Block) {
@@ -550,7 +558,7 @@ impl Compiler {
 
         self.parse_precedence(block, self.precedence(op.clone()).next());
 
-        let op: &[Op] = match op {
+        let ops: &[Op] = match op {
             Token::Plus => &[Op::Add],
             Token::Minus => &[Op::Sub],
             Token::Star => &[Op::Mul],
@@ -564,7 +572,9 @@ impl Compiler {
             Token::GreaterEqual => &[Op::Less, Op::Not],
             _ => { error!(self, "Illegal operator"); &[] }
         };
-        block.add_from(op, self.line());
+        for op in ops.iter() {
+            add_op(self, block, *op);
+        }
     }
 
     /// Entry point for all expression parsing.
@@ -691,7 +701,7 @@ impl Compiler {
             }
         }
 
-        add_op(self, block, Op::Call(arity));
+        add(self, block, Op::Call, arity);
     }
 
     // TODO(ed): de-complexify
@@ -758,30 +768,15 @@ impl Compiler {
             }
         });
 
-        for op in function_block.ops.iter().rev() {
-            match op {
-                Op::Pop | Op::PopUpvalue => {}
-                Op::Return => { break; } ,
-                _ => {
-                    add_op(self, &mut function_block, Op::Constant(self.nil_value()));
-                    add_op(self, &mut function_block, Op::Return);
-                    break;
-                }
-            }
-        }
-
-        if function_block.ops.is_empty() {
-            add_op(self, &mut function_block, Op::Constant(self.nil_value()));
-            add_op(self, &mut function_block, Op::Return);
-        }
+        add(self, &mut function_block, Op::Constant, self.nil_value());
+        add_op(self, &mut function_block, Op::Return);
 
         function_block.ty = Type::Function(args, Box::new(return_type));
         let function_block = Rc::new(RefCell::new(function_block));
 
-
         let constant = self.add_constant(Value::Function(Vec::new(), Rc::clone(&function_block)));
         self.blocks[block_id] = function_block;
-        add_op(self, block, Op::Constant(constant));
+        add(self, block, Op::Constant, constant);
     }
 
     fn variable_expression(&mut self, block: &mut Block) {
@@ -791,9 +786,9 @@ impl Compiler {
         };
         if let Some(var) = self.find_variable(&name) {
             if var.upvalue {
-                add_op(self, block, Op::ReadUpvalue(var.slot));
+                add(self, block, Op::ReadUpvalue, var.slot);
             } else {
-                add_op(self, block, Op::ReadLocal(var.slot));
+                add(self, block, Op::ReadLocal, var.slot);
             }
             loop {
                 match self.peek() {
@@ -801,7 +796,7 @@ impl Compiler {
                         self.eat();
                         if let Token::Identifier(field) = self.eat() {
                             let string = self.intern_string(String::from(field));
-                            add_op(self, block, Op::Get(string));
+                            add(self, block, Op::Get, string);
                         } else {
                             error!(self, "Expected fieldname after '.'.");
                             break;
@@ -816,11 +811,11 @@ impl Compiler {
             }
         } else if let Some(blob) = self.find_blob(&name) {
             let string = self.add_constant(Value::Blob(blob));
-            add_op(self, block, Op::Constant(string));
+            add(self, block, Op::Constant, string);
             parse_branch!(self, block, self.call(block));
         } else if let Some(slot) = self.find_extern_function(&name) {
             let string = self.add_constant(Value::ExternFunction(slot));
-            add_op(self, block, Op::Constant(string));
+            add(self, block, Op::Constant, string);
             self.call(block);
         } else {
             error!(self, format!("Using undefined variable {}.", name));
@@ -881,7 +876,7 @@ impl Compiler {
         let slot = self.define_variable(name, typ.clone(), block);
         self.expression(block);
         let constant = self.add_constant(Value::Ty(typ));
-        add_op(self, block, Op::Define(constant));
+        add(self, block, Op::Define, constant);
 
         if let Ok(slot) = slot {
             self.stack_mut()[slot].active = true;
@@ -927,9 +922,9 @@ impl Compiler {
             }
             if let Some(op) = op {
                 if var.upvalue {
-                    add_op(self, block, Op::ReadUpvalue(var.slot));
+                    add(self, block, Op::ReadUpvalue, var.slot);
                 } else {
-                    add_op(self, block, Op::ReadLocal(var.slot));
+                    add(self, block, Op::ReadLocal, var.slot);
                 }
                 self.expression(block);
                 add_op(self, block, op);
@@ -938,9 +933,9 @@ impl Compiler {
             }
 
             if var.upvalue {
-                add_op(self, block, Op::AssignUpvalue(var.slot));
+                add(self, block, Op::AssignUpvalue, var.slot);
             } else {
-                add_op(self, block, Op::AssignLocal(var.slot));
+                add(self, block, Op::AssignLocal, var.slot);
             }
         } else {
             error!(self, format!("Using undefined variable {}.", name));
@@ -969,23 +964,25 @@ impl Compiler {
     fn if_statment(&mut self, block: &mut Block) {
         expect!(self, Token::If, "Expected 'if' at start of if-statement.");
         self.expression(block);
-        let jump = add_op(self, block, Op::Illegal);
+        add_op(self, block, Op::JmpFalse);
+        let jump = add_usize(self, block, 0);
         self.scope(block);
 
         if Token::Else == self.peek() {
             self.eat();
 
-            let else_jmp = add_op(self, block, Op::Illegal);
-            block.patch(Op::JmpFalse(block.curr()), jump);
+            add_op(self, block, Op::Jmp);
+            let else_jmp = add_usize(self, block, 0);
+            block.patch(block.curr(), jump);
 
             match self.peek() {
                 Token::If => self.if_statment(block),
                 Token::LeftBrace => self.scope(block),
                 _ => error!(self, "Epected 'if' or '{' after else."),
             }
-            block.patch(Op::Jmp(block.curr()), else_jmp);
+            block.patch(block.curr(), else_jmp);
         } else {
-            block.patch(Op::JmpFalse(block.curr()), jump);
+            block.patch(block.curr(), jump);
         }
     }
 
@@ -1013,22 +1010,24 @@ impl Compiler {
 
             let cond = block.curr();
             self.expression(block);
-            let cond_out = add_op(self, block, Op::Illegal);
-            let cond_cont = add_op(self, block, Op::Illegal);
+            add_op(self, block, Op::JmpFalse);
+            let cond_out = add_usize(self, block, 0);
+            add_op(self, block, Op::Jmp);
+            let cond_cont = add_usize(self, block, 0);
             expect!(self, Token::Comma, "Expect ',' between initalizer and loop expression.");
 
             let inc = block.curr();
             push_scope!(self, block, {
                 self.statement(block);
             });
-            add_op(self, block, Op::Jmp(cond));
+            add(self, block, Op::Jmp, cond);
 
             // patch_jmp!(Op::Jmp, cond_cont => block.curr());
-            block.patch(Op::Jmp(block.curr()), cond_cont);
+            block.patch(block.curr(), cond_cont);
             self.scope(block);
-            add_op(self, block, Op::Jmp(inc));
+            add(self, block, Op::Jmp, inc);
 
-            block.patch(Op::JmpFalse(block.curr()), cond_out);
+            block.patch(block.curr(), cond_out);
 
             let stacksize = self.frame().stack.len();
             self.frame_mut().pop_loop(block, stacksize, inc, block.curr());
@@ -1151,9 +1150,9 @@ impl Compiler {
         };
         if let Some(var) = self.find_variable(&name) {
             if var.upvalue {
-                add_op(self, block, Op::ReadUpvalue(var.slot));
+                add(self, block, Op::ReadUpvalue, var.slot);
             } else {
-                add_op(self, block, Op::ReadLocal(var.slot));
+                add(self, block, Op::ReadLocal, var.slot);
             }
             loop {
                 match self.peek() {
@@ -1171,7 +1170,7 @@ impl Compiler {
                             Token::Equal => {
                                 self.eat();
                                 self.expression(block);
-                                add_op(self, block, Op::Set(field));
+                                add(self, block, Op::Set, field);
                                 return;
                             }
 
@@ -1181,16 +1180,16 @@ impl Compiler {
                             Token::SlashEqual => Op::Div,
 
                             _ => {
-                                add_op(self, block, Op::Get(field));
+                                add(self, block, Op::Get, field);
                                 continue;
                             }
                         };
                         add_op(self, block, Op::Copy);
-                        add_op(self, block, Op::Get(field));
+                        add(self, block, Op::Get, field);
                         self.eat();
                         self.expression(block);
                         add_op(self, block, op);
-                        add_op(self, block, Op::Set(field));
+                        add(self, block, Op::Set, field);
                         return;
                     }
                     Token::Newline => {
@@ -1276,7 +1275,9 @@ impl Compiler {
 
             (Token::Break, ..) => {
                 self.eat();
-                let addr = add_op(self, block, Op::Illegal);
+                let addr = add_usize(self, block, 0);
+                add_usize(self, block, 0);
+                let stack_size = self.frame().stack.len();
                 let stack_size = self.frame().stack.len();
                 if self.frame_mut().add_break(addr, stack_size, block).is_err() {;
                     error!(self, "Cannot place 'break' outside of loop.");
@@ -1285,7 +1286,9 @@ impl Compiler {
 
             (Token::Continue, ..) => {
                 self.eat();
-                let addr = add_op(self, block, Op::Illegal);
+                add_op(self, block, Op::JmpNPop);
+                let addr = add_usize(self, block, 0);
+                add_usize(self, block, 0);
                 let stack_size = self.frame().stack.len();
                 if self.frame_mut().add_continue(addr, stack_size, block).is_err() {
                     error!(self, "Cannot place 'continue' outside of loop.");
@@ -1342,7 +1345,7 @@ impl Compiler {
             self.statement(&mut block);
             expect!(self, Token::Newline | Token::EOF, "Expect newline or EOF after expression.");
         }
-        add_op(self, &mut block, Op::Constant(self.nil_value()));
+        add(self, &mut block, Op::Constant, self.nil_value());
         add_op(self, &mut block, Op::Return);
         block.ty = Type::Function(Vec::new(), Box::new(Type::Void));
 

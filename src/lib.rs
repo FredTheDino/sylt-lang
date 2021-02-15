@@ -4,6 +4,8 @@ use std::collections::hash_map::Entry;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use enum_primitive_derive::Primitive;
+use num_traits::ToPrimitive;
 
 use owo_colors::OwoColorize;
 
@@ -288,118 +290,118 @@ impl Blob {
 /// machine carries out when running the
 /// "byte-code".
 ///
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Primitive)]
 pub enum Op {
-    /// Nothing is done.
-    Nop,
-
     /// This instruction should never be run.
     /// Finding it in a program is a critical error.
-    Illegal,
+    Illegal = 0,
+
+    /// Nothing is done.
+    Nop = 1,
 
     /// Pops one value from the stack.
     ///
     /// {A, B} - Pop - {A}
-    Pop,
+    Pop = 2,
     /// Assumes the value on the top of the
     /// stack has an upvalue, and closes that
     /// upvalue.
     ///
     /// {A, B} - Pop - {A}
-    PopUpvalue,
+    PopUpvalue = 3,
     /// Copies the value on the top of the stack
     /// and puts it on top of the stack.
     ///
     /// {A, B} - Copy - {A, B, B}
-    Copy,
+    Copy = 4,
     /// Adds the value indexed in the `constants-vector` to the top of the stack.
     /// Also links upvalues if the value is a function.
     ///
     /// {A} - Constant(B) - {A, B}
-    Constant,
+    Constant = 5,
     /// Creates a new [Tuple] with the given size and place it on the top
     /// of the stack.
     ///
     /// {A, B, C} - Tuple(3) - {D(A, B, C)}
-    Tuple,
+    Tuple = 6,
 
     /// Indexes something indexable, currently only Tuples,
     /// and adds that element to the stack.
     ///
     /// {T, I} - Index - {T[I]}
-    Index,
+    Index = 7,
     /// Looks up a field by the given name
     /// and replaces the parent with it.
     /// Currently only expects [Value::Blob].
     /// (name is looked up in the internal string-list)
     ///
     /// {O} - Get(F) - {O.F}
-    Get,
+    Get = 8,
     /// Looks up a field by the given name
     /// and replaces the current value in the object.
     /// Currently only expects [Value::Blob].
     /// (name is looked up in the internal string-list)
     ///
     /// {O} - Set(F) - {}
-    Set,
+    Set = 9,
 
     /// Adds the two top elements on the stack,
     /// using the function [op::add]. The result
     /// is the pushed.
     ///
     /// {A, B} - Add - {A + B}
-    Add,
+    Add = 10,
     /// Sub the two top elements on the stack,
     /// using the function [op::sub]. The result
     /// is the pushed.
     ///
     /// {A, B} - Sub - {A - B}
-    Sub,
+    Sub = 11,
     /// Multiples the two top elements on the stack,
     /// using the function [op::mul]. The result
     /// is the pushed.
     ///
     /// {A, B} - Mul - {A - B}
-    Mul,
+    Mul = 12,
     /// Divides the two top elements on the stack,
     /// using the function [op::div]. The result
     /// is the pushed.
     ///
     /// {A, B} - Div - {A / B}
-    Div,
+    Div = 13,
     /// Negates the top element on the stack.
     ///
     /// {A} - Neg - {-A}
-    Neg,
+    Neg = 14,
 
     /// Performs a boolean and on the
     /// top 2 stack elements using [op::and].
     ///
     /// {A, B} - And - {A && B}
-    And,
+    And = 15,
     /// Performs a boolean or on the
     /// top 2 stack elements using [op::or].
     ///
     /// {A, B} - Or - {A || B}
-    Or,
+    Or = 16,
     /// Performs a boolean not on the
     /// top stack element using [op::not].
     ///
     /// {A} - Not - {!A}
-    Not,
+    Not = 17,
 
     /// Sets the instruction pointer
     /// to the given value.
     ///
     /// Does not affect the stack.
-    Jmp,
+    Jmp = 18,
     /// Sets the instruction pointer
     /// to the given value, if the
     /// topmost value is false, also
     /// pops this value.
     ///
     /// {A} - JmpFalse(n) - {}
-    JmpFalse,
+    JmpFalse = 19,
     /// Sets the instruction pointer
     /// to the given value and pops
     /// the given amount of values.
@@ -407,61 +409,61 @@ pub enum Op {
     /// Used for 'break' and 'continue'.
     ///
     /// {A, B, C} - JmpNPop(n, 2) - {A}
-    JmpNPop,
+    JmpNPop = 20,
 
     /// Compares the two topmost elements
     /// on the stack for equality, and pushes
     /// the result. Compares using [op::eq].
     ///
     /// {A, B} - Equal - {A == B}
-    Equal,
+    Equal = 21,
     /// Compares the two topmost elements
     /// on the stack for order, and pushes the result.
     /// Compares using [op::less].
     ///
     /// {A, B} - Less - {A < B}
-    Less,
+    Less = 22,
     /// Compares the two topmost elements
     /// on the stack for order, and pushes the result.
     /// Compares using [op::less].
     ///
     /// {A, B} - Greater - {B < A}
-    Greater,
+    Greater = 23,
 
     /// Pops the top value of the stack, and
     /// crashes the program if it is false.
     ///
     /// {A} - Assert - {}
-    Assert,
+    Assert = 24,
     /// This instruction should not be executed.
     /// If it is the program crashes.
     ///
     /// Does not affect the stack.
-    Unreachable,
+    Unreachable = 100,
 
     /// Reads the value counted from the
     /// bottom of the stack and adds it
     /// to the top.
     ///
     /// {A, B} - ReadLocal(0) - {A, B, A}
-    ReadLocal,
+    ReadLocal = 25,
     /// Sets the value at the given index
     /// of the stack, to the topmost value.
     /// Pops the topsmost element.
     ///
     /// {A, B} - AssignLocal(0) - {B}
-    AssignLocal,
+    AssignLocal = 26,
 
     /// Reads the upvalue, and adds it
     /// to the top of the stack.
     ///
     /// {} - ReadUpvalue(0) - {A}
-    ReadUpvalue,
+    ReadUpvalue = 27,
     /// Sets the given upvalue, and pops
     /// the topmost element.
     ///
     /// {A} - AssignUpvalue(0) - {}
-    AssignUpvalue,
+    AssignUpvalue = 28,
 
     /// A helper instruction for the typechecker,
     /// makes sure the top value on the stack
@@ -470,7 +472,7 @@ pub enum Op {
     /// (The type is looked up in the constants vector)
     ///
     /// Does not affect the stack.
-    Define,
+    Define = 29,
 
     /// Calls "something" with the given number
     /// of arguments. The callable value is
@@ -480,25 +482,25 @@ pub enum Op {
     /// and [Value::ExternFunction].
     ///
     /// {F, A, B} - Call(2) - {F(A, B)}
-    Call,
+    Call = 30,
 
     /// Prints and pops the top value on the stack.
     ///
     /// {A} - Print - {}
-    Print,
+    Print = 31,
 
     /// Pops the current stackframe and replaces
     /// slot 0 with the top value. Also pops
     /// upvalues.
     ///
     /// {F, A, B} - Return - {..., B}
-    Return,
+    Return = 32,
 
     /// Temporarily stops execution and returns
     /// to the call site.
     ///
     /// Does not affect the stack.
-    Yield,
+    Yield = 111,
 }
 
 ///
@@ -699,7 +701,7 @@ impl Block {
     fn add_op(&mut self, op: Op, token_position: usize) -> usize {
         let len = self.curr();
         self.add_line(token_position);
-        self.ops.push(op as u8);
+        self.ops.push(op.to_u8().unwrap());
         len
     }
 

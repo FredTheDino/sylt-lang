@@ -7,6 +7,8 @@ use std::convert::TryInto;
 
 use owo_colors::OwoColorize;
 
+use num_traits::FromPrimitive;
+
 use crate::{Blob, Block, Op, Prog, UpValue, Value, op};
 use crate::error::{Error, ErrorKind};
 use crate::RustFunction;
@@ -159,8 +161,8 @@ impl VM {
     fn op(&mut self) -> Op {
         let ip = self.frame().ip;
         self.frame_mut().ip += 1;
-        // Note(ed): This is pretty... Dumb...
-        unsafe { std::mem::transmute::<u8, Op>(self.frame().block.borrow().ops[ip]) }
+        Op::from_u8(self.frame().block.borrow().ops[ip])
+            .unwrap_or_else(|| self.crash_and_burn())
     }
 
     fn usize(&mut self) -> usize {
@@ -414,7 +416,9 @@ impl VM {
                 self.stack[slot] = self.pop();
             }
 
-            Op::Define => {}
+            Op::Define => {
+                self.usize();
+            }
 
             Op::Call => {
                 let num_args = self.usize();
@@ -504,7 +508,7 @@ impl VM {
         println!("{:5} {:05} {:?}",
             self.frame().block.borrow().line(self.frame().ip).red(),
             self.frame().ip.blue(),
-            self.frame().block.borrow().ops[self.frame().ip]);
+            Op::from_u8(self.frame().block.borrow().ops[self.frame().ip]));
     }
 
     // Initalizes the VM for running. Run cannot be called before this.
